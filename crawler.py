@@ -1,6 +1,7 @@
 import string
 import random
 import argparse
+import json
 from os import path, mkdir
 from bs4 import BeautifulSoup as bs
 import asyncio
@@ -10,6 +11,7 @@ import aiofiles
 from contextlib import suppress
 
 TARGET_URL = "https://news.ycombinator.com"
+API_URL = "https://hacker-news.firebaseio.com/v0/topstories.json"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -54,21 +56,26 @@ class Crawler:
     and links in comments.
     """
 
-    def __init__(self, target_url, directory):
-        self.target_url = target_url
+    def __init__(self, directory):
         self.download_dir = directory
 
-    async def crawl(self, period):
+    async def crawl(self, period, amount):
         """Polls the site for new news
 
         Args:
             period (int): Polling interval in seconds
+            amount (int): Number of processed top news
         """
-        self.session = aiohttp.ClientSession(loop=self.loop)
+        self.session = aiohttp.ClientSession(
+            loop=self.loop,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/112.0"
+            },
+        )
 
         while True:
             logging.info("Starting new iteration...")
-            future = asyncio.ensure_future(self.get_posts())
+            future = asyncio.ensure_future(self.get_posts(amount))
 
             await asyncio.sleep(period)
 
@@ -82,15 +89,16 @@ class Crawler:
             with suppress(asyncio.CancelledError):
                 await task
 
-    def run_crawler(self, period: int) -> None:
+    def run_crawler(self, period: int, amount: int = 30) -> None:
         """Starts a poll Loop
 
         Args:
             period (int): Polling interval in seconds
+            amount (int, optional): Number of processed top news. Defaults to 30.
         """
         self.loop = asyncio.get_event_loop()
         try:
-            self.loop.run_until_complete(self.crawl(period))
+            self.loop.run_until_complete(self.crawl(period, amount))
 
         except KeyboardInterrupt:
             logging.info("Shutting down - received keyboard interrupt")
@@ -132,6 +140,7 @@ class Crawler:
         comments_url = f"{TARGET_URL}/item?id={id}"
         try:
             response = await self.fetch(comments_url)
+            await asyncio.sleep(random.randint(0, 4))
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -153,10 +162,14 @@ class Crawler:
         tasks = [self.download(l, folder) for l in comment_links]
         results = await asyncio.gather(*tasks)
 
-    async def get_posts(self):
-        """Parses main page with top news"""
+    async def get_posts(self, amount: int):
+        """Parses main page with top news
+
+        Args:
+            amount (int): Number of processed top news
+        """
         try:
-            response = await self.fetch(TARGET_URL)
+            response = await self.fetch(API_URL)
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -166,29 +179,50 @@ class Crawler:
         if not response:
             return
 
-        root = bs(response, "html.parser")
-        news = root.find_all("tr", {"class": "athing"})
-        tasks = [self.process_post(n) for n in news]
+        news = json.loads(response.decode("utf-8"))
+        tasks = [self.process_post(n) for n in news[:amount]]
 
         results = await asyncio.gather(*tasks)
 
-    async def process_post(self, post_info: bs):
+    async def process_post(self, post_id: int):
         """Parses news post and starts downloading
 
         Args:
-            post_info (BeautifulSoup): Tag element
+            post_info (int): Post Id
         """
-        id = post_info.get("id")
-        if path.exists(path.join(self.download_dir, id)):
-            logging.info(f"Post {id} had already previously saved. Skipping...")
+        folder = path.join(self.download_dir, str(post_id))
+        if path.exists(folder):
+            logging.info(f"Post {post_id} had already previously saved. Skipping...")
             return
-        logging.info(f"Process post {id}")
-        title_elem = post_info.find("span", {"class": "titleline"}).find("a")
+
+        logging.info(f"Collecting links for post {post_id}")
+        comments_url = f"{TARGET_URL}/item?id={post_id}"
+        try:
+            await asyncio.sleep(random.randint(0, 4))
+            response = await self.fetch(comments_url)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logging.error(e)
+            return
+
+        if not response:
+            return
+        post_comment_page = bs(response, "html.parser")
+        comments = post_comment_page.find_all("span", {"class": "commtext c00"})
+        links = list()
+        for comm in comments:
+            links = get_links(comm)
+            if links:
+                links.extend(links)
+
+        title_elem = post_comment_page.find("span", {"class": "titleline"}).find("a")
         link = title_elem.get("href")
-        folder = path.join(self.download_dir, id)
+        links.append(link)
+
         mkdir(folder)
-        await self.download(link, folder)
-        await self.get_comments(id)
+        tasks = [self.download(l, folder) for l in links]
+        results = await asyncio.gather(*tasks)
 
     async def download(self, url: str, folder: str):
         """Download web page provided by URL
@@ -220,7 +254,15 @@ if __name__ == "__main__":
         metavar="period",
         type=int,
         default=120,
-        help="Poll period in seconds. Default 2 minutes",
+        help="Poll period in seconds. Defaults to 2 minutes",
+        required=False,
+    )
+    parser.add_argument(
+        "--amount",
+        metavar="amount",
+        type=int,
+        default=30,
+        help="Number of posts to parse, Defaults to 30",
         required=False,
     )
     parser.add_argument(
@@ -234,5 +276,5 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    crawler = Crawler(TARGET_URL, args.direcroty)
-    crawler.run_crawler(args.period)
+    crawler = Crawler(args.direcroty)
+    crawler.run_crawler(args.period, args.amount)
