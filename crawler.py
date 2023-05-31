@@ -12,6 +12,7 @@ from contextlib import suppress
 
 TARGET_URL = "https://news.ycombinator.com"
 API_URL = "https://hacker-news.firebaseio.com/v0/topstories.json"
+DEFAULT_CONCUR_REQ = 3
 
 logging.basicConfig(
     level=logging.INFO,
@@ -58,6 +59,7 @@ class Crawler:
 
     def __init__(self, directory):
         self.download_dir = directory
+        self.semaphore = asyncio.Semaphore(DEFAULT_CONCUR_REQ)
 
     async def crawl(self, period, amount):
         """Polls the site for new news
@@ -140,7 +142,6 @@ class Crawler:
         comments_url = f"{TARGET_URL}/item?id={id}"
         try:
             response = await self.fetch(comments_url)
-            await asyncio.sleep(random.randint(0, 4))
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -198,8 +199,8 @@ class Crawler:
         logging.info(f"Collecting links for post {post_id}")
         comments_url = f"{TARGET_URL}/item?id={post_id}"
         try:
-            await asyncio.sleep(random.randint(0, 4))
-            response = await self.fetch(comments_url)
+            async with self.semaphore:
+                response = await self.fetch(comments_url)
         except asyncio.CancelledError:
             raise
         except Exception as e:
