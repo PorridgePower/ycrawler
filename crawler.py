@@ -276,15 +276,15 @@ if __name__ == "__main__":
         required=False,
     )
     parser.add_argument(
-        "--direcroty",
-        metavar="direcroty",
+        "--directory",
+        metavar="directory",
         type=str,
         default=path.dirname(path.abspath(__file__)) + "/downloads",
-        help="Download direcroty",
+        help="Download directory",
         required=False,
     )
 
     args = parser.parse_args()
 
-    crawler = Crawler(args.direcroty)
+    crawler = Crawler(args.directory)
     crawler.run_crawler(args.period, args.amount)
