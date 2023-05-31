@@ -68,6 +68,15 @@ class Crawler:
             period (int): Polling interval in seconds
             amount (int): Number of processed top news
         """
+
+        if not path.exists(self.download_dir):
+            try:
+                mkdir(self.download)
+            except OSError as e:
+                logging.ERROR(
+                    f"Cannot create directory {self.download_dir} for downloads:{e}"
+                )
+                return
         self.session = aiohttp.ClientSession(
             loop=self.loop,
             headers={
